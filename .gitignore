@@ -9,3 +9,5 @@ next-env.d.ts
 beamup.json
 data/
 testing/
+.vercel
+.env*
