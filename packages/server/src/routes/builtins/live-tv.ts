@@ -730,11 +730,11 @@ for (const [source, Addon] of [
     `/${source}/:encodedConfig/catalog/:type/:id{/:extras}.json`,
     async (req: Request<ResourceParams>, res: Response, next: NextFunction) => {
       try {
-        const { skip, date } = parseCatalogExtras(getEncodedExtras(req));
+        const { skip, date, genre } = parseCatalogExtras(getEncodedExtras(req));
         const addon = new Addon(
           SpainTvConfigSchema.parse(config(req.params.encodedConfig))
         );
-        res.json(await addon.getCatalogResponse(skip, date));
+        res.json(await addon.getCatalogResponse(skip, date, genre));
       } catch (error) {
         next(error);
       }

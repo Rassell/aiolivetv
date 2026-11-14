@@ -341,7 +341,7 @@ describe('Spanish metadata providers', () => {
 });
 
 const playlist =
-  '#EXTM3U\n#EXTINF:-1 tvg-id="La1.TV" tvg-name="La 1" tvg-logo="https://example.com/logo.png",La 1\nhttps://example.com/one.m3u8\n#EXTINF:-1 tvg-id="La1.TV" tvg-name="La 1",La 1\nhttps://example.com/two.m3u8\n#EXTINF:-1 tvg-id="extra" tvg-name="Extra",Extra\nhttps://example.com/extra.m3u8';
+  '#EXTM3U\n#EXTINF:-1 tvg-id="La1.TV" tvg-name="La 1" tvg-logo="https://example.com/logo.png" group-title="Generalistas",La 1\nhttps://example.com/one.m3u8\n#EXTINF:-1 tvg-id="La1.TV" tvg-name="La 1" group-title="Generalistas",La 1\nhttps://example.com/two.m3u8\n#EXTINF:-1 tvg-id="extra" tvg-name="Extra" group-title="Deportivos",Extra\nhttps://example.com/extra.m3u8';
 const xml =
   '<tv><channel id="La1.TV"><display-name>La1.TV</display-name></channel><programme channel="La1.TV" start="20261013120000 +0000" stop="20261013130000 +0000"><title>News</title><desc>Latest news</desc><category>News</category></programme></tv>';
 function tdtMock(epg = true) {
@@ -357,6 +357,35 @@ function tdtMock(epg = true) {
   });
 }
 describe('TDTChannels builtin', () => {
+  it.each([true, false])(
+    'advertises and applies catalog groups (guide available: %s)',
+    async (epg) => {
+      tdtMock(epg);
+      const addon = new TdtChannelsAddon({ timeout: 1000 });
+      expect((await addon.getManifest()).catalogs[0].extra).toContainEqual({
+        name: 'genre',
+        isRequired: false,
+        options: epg ? ['Generalistas'] : ['Deportivos', 'Generalistas'],
+      });
+      expect(
+        (await addon.getCatalogResponse(0, undefined, 'Generalistas')).metas
+      ).toMatchObject([{ name: 'La 1', genres: ['Generalistas'] }]);
+      expect(
+        (await addon.getCatalogResponse(1, undefined, 'Generalistas')).metas
+      ).toEqual([]);
+      expect(
+        (await addon.getCatalogResponse(0, '2026-10-13', 'Generalistas'))
+          .metasDetailed
+      ).toMatchObject([
+        { name: 'La 1', videos: epg ? [{ title: 'News' }] : [] },
+      ]);
+      expect(
+        (await addon.getCatalogResponse(0, '2026-10-13', 'Unknown'))
+          .metasDetailed
+      ).toEqual([]);
+    }
+  );
+
   it('keeps guide channels when the playlist is unavailable', async () => {
     tdtMock();
     const original = vi.mocked(makeRequest).getMockImplementation()!;
