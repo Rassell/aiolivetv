@@ -7,8 +7,10 @@ import {
   applyEpgTimeShift,
   bareChannelPreview,
   buildEpgCatalogResponse,
+  channelGenreCatalogExtra,
   EPG_GUIDE_CATALOG_EXTRAS,
   guideChannelMeta,
+  itemMatchesCatalogGenre,
   LIVE_TV_CATALOG_PAGE_SIZE,
   mapWithEpgConcurrency,
   programToVideo,
@@ -725,33 +727,40 @@ export class TdtChannelsAddon {
     this.config = SpainTvConfigSchema.parse(config);
   }
   async getManifest(): Promise<Manifest> {
-    let epg = false;
-    try {
-      epg = Boolean((await tdtData(this.config)).guide?.programs.length);
-    } catch {
-      /* A temporary source failure must not advertise Native EPG. */
-    }
-    return manifest('tdtchannels', 'TDTChannels', epg, true);
-  }
-  async getCatalog(skip = 0) {
-    return (await tdtData(this.config)).channels.slice(
-      skip,
-      skip + LIVE_TV_CATALOG_PAGE_SIZE
+    const data = await tdtData(this.config).catch(() => undefined);
+    const tdtManifest = manifest(
+      'tdtchannels',
+      'TDTChannels',
+      Boolean(data?.guide?.programs.length),
+      true
     );
+    const genreExtra = channelGenreCatalogExtra(
+      data?.channels.flatMap((channel) => channel.genres ?? [])
+    );
+    if (genreExtra.options?.length) {
+      tdtManifest.catalogs[0].extra?.push(genreExtra);
+    }
+    return tdtManifest;
   }
-  async getCatalogGuide(skip = 0, date?: string): Promise<Meta[]> {
+  async getCatalog(skip = 0, genre?: string) {
+    return (await tdtData(this.config)).channels
+      .filter((channel) => itemMatchesCatalogGenre(channel, genre))
+      .slice(skip, skip + LIVE_TV_CATALOG_PAGE_SIZE);
+  }
+  async getCatalogGuide(skip = 0, date?: string, genre?: string): Promise<Meta[]> {
     const { channels, guide } = await tdtData(this.config);
     const day = resolveGuideDate(date);
     return channels
+      .filter((channel) => itemMatchesCatalogGenre(channel, genre))
       .slice(skip, skip + LIVE_TV_CATALOG_PAGE_SIZE)
       .map((channel) =>
         channelMeta(channel, tdtVideos(this.config, channel, day, guide))
       );
   }
-  async getCatalogResponse(skip = 0, date?: string) {
+  async getCatalogResponse(skip = 0, date?: string, genre?: string) {
     return buildEpgCatalogResponse(
-      (page) => this.getCatalog(page),
-      (page, day) => this.getCatalogGuide(page, day),
+      (page) => this.getCatalog(page, genre),
+      (page, day) => this.getCatalogGuide(page, day, genre),
       skip,
       date
     );

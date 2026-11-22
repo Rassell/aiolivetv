@@ -23,6 +23,8 @@ import {
 import {
   ERROR_META_ID_PREFIX,
   LEGACY_ERROR_META_ID_PREFIX,
+  SPORTS_EVENT_PREFIX,
+  isSportsCatalogId,
 } from '../utils/identity.js';
 
 const logger = createLogger('core');
@@ -33,6 +35,12 @@ export async function applyPresets(ctx: AIOStreamsContext): Promise<void> {
   }
 
   for (const preset of ctx.userData.presets.filter((p) => p.enabled)) {
+    // Sport IDs are shared across locales and broadcast markets.
+    if (
+      preset.type === 'sports' &&
+      ctx.addons.some((addon) => addon.preset.type === 'sports')
+    )
+      continue;
     try {
       if (!PresetManager.has(preset.type)) {
         logger.warn(
@@ -487,7 +495,8 @@ export function buildResources(ctx: AIOStreamsContext): void {
       if (isLiveTvMergedCatalogId(mc.id)) {
         addLiveTvChannelMappingGenreOptions(
           mergedExtras,
-          ctx.userData.channelMappings
+          ctx.userData.channelMappings,
+          ctx.userData.channelGroupMerges
         );
       }
       ctx.finalCatalogs.push({
@@ -608,12 +617,17 @@ export function buildResources(ctx: AIOStreamsContext): void {
 }
 
 function normalizeLiveTvManifest(ctx: AIOStreamsContext): void {
+  const sportsEnabled = ctx.addons.some(
+    (addon) =>
+      addon.preset.type === 'sports' && ctx.manifests[addon.instanceId!]
+  );
   const catalogName =
     ctx.userData.addonName?.trim() ||
     appConfig.branding.addonName ||
     'AIOLiveTV';
 
   ctx.finalCatalogs = ctx.finalCatalogs.map((catalog) => {
+    if (isSportsCatalogId(catalog.id)) return catalog;
     const type =
       catalog.type === constants.CHANNEL_TYPE
         ? constants.TV_TYPE
@@ -632,7 +646,20 @@ function normalizeLiveTvManifest(ctx: AIOStreamsContext): void {
     );
     if (!resource) continue;
     resource.types = [constants.TV_TYPE];
-    resource.idPrefixes = [CHANNEL_ID_PREFIX];
+    resource.idPrefixes =
+      sportsEnabled && resourceName !== 'catalog'
+        ? [CHANNEL_ID_PREFIX, SPORTS_EVENT_PREFIX]
+        : [CHANNEL_ID_PREFIX];
+  }
+  if (
+    sportsEnabled &&
+    !ctx.finalResources.some((resource) => resource.name === 'stream')
+  ) {
+    ctx.finalResources.push({
+      name: 'stream',
+      types: [constants.TV_TYPE],
+      idPrefixes: [SPORTS_EVENT_PREFIX],
+    });
   }
 }
 

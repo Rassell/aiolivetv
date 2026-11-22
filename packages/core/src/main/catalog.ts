@@ -36,10 +36,14 @@ import {
   type MergedCatalogSkipState,
 } from './caches.js';
 
-import { isMergedCatalogId } from './liveTvMergedCatalog.js';
+import {
+  isLiveTvMergedCatalogId,
+  isMergedCatalogId,
+} from './liveTvMergedCatalog.js';
 import { LIVE_TV_CATALOG_PAGE_SIZE } from '../builtins/live-tv/epg.js';
 import { config as appConfig } from '../config/index.js';
 import { addonProvidesNativeEpg } from './epgProvider.js';
+import { isSportsCatalogId } from '../utils/identity.js';
 
 export {
   LIVE_TV_MERGED_CATALOG_ID,
@@ -521,13 +525,16 @@ function applyLiveTvCatalogOverlay<
   type: string,
   items: T[],
   genre?: string,
-  sortByName = true
+  sortByName = true,
+  mergeGroups = false
 ): T[] {
   if (!isLiveChannelType(type)) return items;
-  const overlaid = applyLiveChannelGroupOverlay(ctx.userData, items).filter(
-    (item) => itemMatchesCatalogGenre(item, genre)
-  );
-  return sortByName ? sortLiveCatalogItems(overlaid) : overlaid;
+  const overlaid = applyLiveChannelGroupOverlay(
+    ctx.userData,
+    items,
+    mergeGroups
+  ).filter((item) => itemMatchesCatalogGenre(item, genre));
+  return sortByName ? sortLiveCatalogItems(overlaid, ctx.userData) : overlaid;
 }
 
 /**
@@ -738,7 +745,8 @@ export async function getMergedCatalog(
   ctx: AIOStreamsContext,
   type: string,
   id: string,
-  extras?: string
+  extras?: string,
+  paginateLive = true
 ): Promise<AIOStreamsCatalogResponse> {
   const start = Date.now();
   const mergedCatalog = ctx.userData.mergedCatalogs?.find((mc) => mc.id === id);
@@ -877,21 +885,24 @@ export async function getMergedCatalog(
   }
   const paginate = (
     catalog: AIOStreamsCatalogResponse
-  ): AIOStreamsCatalogResponse => ({
-    ...catalog,
-    data: catalog.data.slice(
-      requestedSkip,
-      requestedSkip + LIVE_TV_CATALOG_PAGE_SIZE
-    ),
-    ...(catalog.metasDetailed
-      ? {
-          metasDetailed: catalog.metasDetailed.slice(
+  ): AIOStreamsCatalogResponse =>
+    !paginateLive
+      ? catalog
+      : {
+          ...catalog,
+          data: catalog.data.slice(
             requestedSkip,
             requestedSkip + LIVE_TV_CATALOG_PAGE_SIZE
           ),
-        }
-      : {}),
-  });
+          ...(catalog.metasDetailed
+            ? {
+                metasDetailed: catalog.metasDetailed.slice(
+                  requestedSkip,
+                  requestedSkip + LIVE_TV_CATALOG_PAGE_SIZE
+                ),
+              }
+            : {}),
+        };
   if (isLiveMerged) {
     const cached = await mergedCatalogCache.get(liveCatalogCacheKey);
     if (cached?.catalog) return paginate(cached.catalog);
@@ -1097,6 +1108,7 @@ export async function getMergedCatalog(
           fetched: 0,
           success: false,
           skipped: false,
+          error: result.error,
         };
       }
 
@@ -1144,6 +1156,11 @@ export async function getMergedCatalog(
           description:
             'Unable to fetch items from any source catalog. Please try again later.',
         },
+        ...(isLiveMerged
+          ? nonSkippedResults.flatMap((result) =>
+              result.error ? [result.error] : []
+            )
+          : []),
       ],
     };
   }
@@ -1202,7 +1219,8 @@ export async function getMergedCatalog(
       type,
       allItems,
       requestedGenre,
-      !modification?.shuffle && !modification?.reverse
+      !modification?.shuffle && !modification?.reverse,
+      isLiveTvMergedCatalogId(id)
     );
     if (isLiveMerged) {
       const catalog = {
@@ -1351,15 +1369,18 @@ export async function getCatalog(
 
   return {
     success: true,
-    data: isLiveChannelType(type)
-      ? applyLiveTvCatalogOverlay(
-          ctx,
-          type,
-          catalog.filter((item) => isLiveChannelVisible(ctx.userData, item.id)),
-          parsedExtras.genre,
-          !modification?.shuffle && !modification?.reverse
-        )
-      : catalog,
+    data:
+      isLiveChannelType(type) && !isSportsCatalogId(actualCatalogId)
+        ? applyLiveTvCatalogOverlay(
+            ctx,
+            type,
+            catalog.filter((item) =>
+              isLiveChannelVisible(ctx.userData, item.id)
+            ),
+            parsedExtras.genre,
+            !modification?.shuffle && !modification?.reverse
+          )
+        : catalog,
     errors: [],
   };
 }

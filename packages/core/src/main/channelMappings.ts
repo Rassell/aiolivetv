@@ -7,7 +7,9 @@ import {
   containsAsWordSequence,
   getChannelNameSimilarity,
   normalizeChannelGroup,
+  readChannelNumber,
   normalizeChannelName,
+  resolveChannelGroup,
 } from '../utils/channelName.js';
 import { decodeHtmlEntities } from '../utils/text.js';
 
@@ -121,7 +123,10 @@ export function getEffectiveChannelGroup(
   const override = normalizeChannelGroup(
     getChannelMapping(userData, channelId)?.group
   );
-  return override || normalizeChannelGroup(sourceGroup);
+  return resolveChannelGroup(
+    override || normalizeChannelGroup(sourceGroup),
+    userData.channelGroupMerges
+  );
 }
 
 export function applyLiveChannelGroupOverlay<
@@ -132,7 +137,7 @@ export function applyLiveChannelGroupOverlay<
     logo?: string | null;
     genres?: string[] | null;
   },
->(userData: UserData, items: T[]): T[] {
+>(userData: UserData, items: T[], mergeGroups = false): T[] {
   const byId = new Map<
     string,
     NonNullable<UserData['channelMappings']>[number]
@@ -142,11 +147,15 @@ export function applyLiveChannelGroupOverlay<
   }
   return items.map((item) => {
     const mapping = byId.get(getCanonicalChannelId(item.id));
-    const group =
+    const originalGroup =
       normalizeChannelGroup(mapping?.group) ||
       normalizeChannelGroup(
         Array.isArray(item.genres) ? item.genres[0] : undefined
       );
+    const group = resolveChannelGroup(
+      originalGroup,
+      mergeGroups ? userData.channelGroupMerges : undefined
+    );
     const name = mapping?.name?.trim();
     const poster = mapping?.poster?.trim();
     return {
@@ -158,14 +167,42 @@ export function applyLiveChannelGroupOverlay<
   });
 }
 
-export function sortLiveCatalogItems<
-  T extends { id: string; name?: string | null },
->(items: T[]): T[] {
-  return [...items].sort((left, right) =>
-    (left.name ?? left.id).localeCompare(right.name ?? right.id, undefined, {
+type LiveChannelOrderFields = {
+  id: string;
+  name?: string | null;
+  channelNumber?: unknown;
+};
+
+export function compareChannelOrder(
+  left: LiveChannelOrderFields,
+  right: LiveChannelOrderFields
+): number {
+  const a = readChannelNumber(left.channelNumber) ?? Infinity;
+  const b = readChannelNumber(right.channelNumber) ?? Infinity;
+  if (a !== b) return a - b;
+  return (left.name ?? left.id).localeCompare(
+    right.name ?? right.id,
+    undefined,
+    {
       sensitivity: 'base',
-    })
+    }
   );
+}
+
+export function sortLiveCatalogItems<T extends LiveChannelOrderFields>(
+  items: T[],
+  userData?: Pick<UserData, 'channelOrder'>
+): T[] {
+  const order = new Map(
+    userData?.channelOrder?.map((id, index) => [id, index])
+  );
+  if (!order.size) return [...items].sort(compareChannelOrder);
+
+  return [...items].sort((left, right) => {
+    const a = order.get(getCanonicalChannelId(left.id)) ?? Infinity;
+    const b = order.get(getCanonicalChannelId(right.id)) ?? Infinity;
+    return a === b ? compareChannelOrder(left, right) : a - b;
+  });
 }
 
 function normaliseId(value?: string) {
@@ -323,8 +360,18 @@ export function isChannelAddonEnabled(
   addonId: string,
   streamChannelId?: string
 ) {
+  const mapping = getChannelMapping(userData, channelId);
+  if (
+    streamChannelId &&
+    mapping?.rejectedStreams?.some(
+      (stream) =>
+        stream.addonId === addonId && stream.channelId === streamChannelId
+    )
+  ) {
+    return false;
+  }
   return (
-    getChannelMapping(userData, channelId)?.streams?.find(
+    mapping?.streams?.find(
       (stream) =>
         stream.addonId === addonId &&
         (!streamChannelId || stream.channelId === streamChannelId)

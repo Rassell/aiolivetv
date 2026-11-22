@@ -3,6 +3,7 @@ import type { ChannelInfo } from '@/lib/api';
 import {
   asChannelsResponse,
   buildVisibleChannelMappings,
+  unlinkChannelStream,
   clearAutomaticChannelMappings,
   type ChannelMappingProjectionCache,
   channelHasPlayableStream,
@@ -18,6 +19,8 @@ import {
   normalizeChannelGroup,
   compareChannelScans,
   matchesChannelFilters,
+  moveChannelInOrder,
+  sortChannels,
 } from '../utils';
 
 describe('clearAutomaticChannelMappings', () => {
@@ -167,6 +170,46 @@ function channel(
 }
 
 describe('buildVisibleChannelMappings', () => {
+  it('keeps the channel and remembers the rejection when its only linked stream is removed', () => {
+    const source = {
+      id: 'fayatv:universal',
+      addonId: 'fayatv',
+      addonName: 'FayaTV',
+      channelId: 'fayatv:universal',
+      name: 'TV Universal (Brazil)',
+      confidence: 1,
+      enabled: true,
+      canStream: true,
+      epgProvider: false,
+    };
+    const original = channel({
+      id: 'guide:universal',
+      name: 'Universal TV',
+      mappings: [source],
+    });
+    const next = unlinkChannelStream(
+      original,
+      source.addonId,
+      source.channelId
+    );
+    expect(next.availableStreamSources).toMatchObject([
+      { addonId: source.addonId, channelId: source.channelId },
+    ]);
+    expect(
+      buildVisibleChannelMappings([next], [], new Set(), new WeakMap())
+    ).toMatchObject([
+      {
+        id: original.id,
+        canonicalAddonId: original.canonicalAddonId,
+        enabled: true,
+        streams: [],
+        rejectedStreams: [
+          { addonId: source.addonId, channelId: source.channelId },
+        ],
+      },
+    ]);
+  });
+
   it('preserves a guide choice even when the channel has no streams or custom name', () => {
     const epgSource = { addonId: 'other-guide', channelId: 'different-id' };
     const item = channel({ id: 'bbc', name: 'BBC', epgSource });
@@ -319,6 +362,43 @@ describe('buildVisibleChannelMappings', () => {
       new WeakMap()
     );
     expect(mapping.streams?.[0].channelId).toBe('m3u:bbc');
+  });
+
+  it('keeps source numbers out of saved mappings', () => {
+    const item = channel({
+      id: 'bbc',
+      name: 'BBC',
+      channelNumber: 7,
+      enabled: true,
+      mappings: [],
+    });
+    expect(
+      buildVisibleChannelMappings([item], [], new Set(), new WeakMap())
+    ).toEqual([]);
+  });
+});
+
+describe('channel order', () => {
+  it('moves filtered channels while preserving other and unavailable channels', () => {
+    const order = moveChannelInOrder(
+      ['a', 'hidden', 'b', 'unavailable', 'c'],
+      ['a', 'b', 'c'],
+      2,
+      0
+    );
+    expect(order).toEqual(['c', 'hidden', 'a', 'unavailable', 'b']);
+    expect(
+      sortChannels(
+        [
+          channel({ id: 'a', name: 'Alpha', channelNumber: 1 }),
+          channel({ id: 'b', name: 'Beta', channelNumber: 2 }),
+          channel({ id: 'c', name: 'Charlie', channelNumber: 3 }),
+          channel({ id: 'new', name: 'New', channelNumber: 0 }),
+        ],
+        'number',
+        order
+      ).map(({ id }) => id)
+    ).toEqual(['c', 'a', 'b', 'new']);
   });
 });
 

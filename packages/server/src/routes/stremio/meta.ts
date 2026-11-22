@@ -46,7 +46,6 @@ router.get(
       logger.debug('Meta request received', {
         type,
         id,
-        userData: req.userData,
       });
 
       if (isErrorMetaId(id)) {
@@ -84,9 +83,11 @@ router.get(
           })
         );
       } else {
-        setStremioMetaCacheHeaders(res, {
-          cacheable: Boolean(transformed.meta),
-        });
+        setStremioMetaCacheHeaders(res, { cacheable: meta.success });
+        if (!meta.success) {
+          res.status(200).json(transformed);
+          return;
+        }
         res.status(200).json({
           ...transformed,
           cacheMaxAge: 900,

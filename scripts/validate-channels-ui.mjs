@@ -132,6 +132,8 @@ try {
     epgProvider: true,
     country: index % 2 ? 'PT' : 'BR',
     language: index % 2 ? 'pt-PT' : 'pt-BR',
+    group: index % 2 ? 'Infantil' : 'Infantiles',
+    sourceGroup: index % 2 ? 'Infantil' : 'Infantiles',
     mappings:
       index === 0
         ? [
@@ -191,7 +193,7 @@ try {
     ['mobile', { width: 390, height: 844 }],
     ['mobile-narrow', { width: 320, height: 740 }],
   ]) {
-    const context = await browser.newContext({ viewport });
+    const context = await browser.newContext({ viewport, hasTouch: viewport.width < 640 });
     await context.addInitScript((draft) => {
       if (!localStorage.getItem('aiolivetv-user-data'))
         localStorage.setItem('aiolivetv-user-data', JSON.stringify(draft));
@@ -610,6 +612,45 @@ try {
           mapping.epgSource?.channelId === 'different-channel-id'
       )
     );
+    await page.getByRole('button', { name: 'Merge groups' }).click();
+    const mergeGroups = page.getByRole('dialog', { name: 'Merge groups' });
+    for (const [select, option] of [
+      ['Group to merge', 'Infantiles'],
+      ['Group to keep', 'Infantil'],
+    ]) {
+      await mergeGroups.getByRole('combobox', { name: select }).click();
+      await page.getByRole('option', { name: option, exact: true }).click();
+    }
+    await mergeGroups.getByRole('button', { name: 'Merge', exact: true }).click();
+    await page.waitForFunction(() => {
+      const draft = JSON.parse(localStorage.getItem('aiolivetv-user-data'));
+      return (
+        draft.channelGroupMerges?.Infantiles === 'Infantil' &&
+        !draft.channelMappings.some((mapping) => mapping.group === 'Infantil')
+      );
+    });
+    await mergeGroups.locator('.UI-Modal__close').click();
+    await page.getByRole('combobox', { name: 'Filter by group' }).click();
+    assert.equal(
+      await page.getByRole('option', { name: 'Infantiles', exact: true }).count(),
+      0
+    );
+    await page.getByRole('option', { name: 'Infantil', exact: true }).click();
+    await list
+      .locator('[data-index]')
+      .first()
+      .getByText('Infantil', { exact: true })
+      .waitFor({ state: 'attached' });
+    await page.getByRole('button', { name: 'Merge groups' }).click();
+    await mergeGroups
+      .getByRole('button', { name: 'Undo merge of Infantiles into Infantil' })
+      .click();
+    await page.waitForFunction(
+      () =>
+        !JSON.parse(localStorage.getItem('aiolivetv-user-data')).channelGroupMerges
+    );
+    await mergeGroups.locator('.UI-Modal__close').click();
+    assert.deepEqual(writes, [], 'Group merges must stay in the draft');
     await page.getByRole('combobox', { name: 'Filter by country' }).click();
     await page.getByRole('option', { name: 'BR', exact: true }).click();
     await page.getByRole('combobox', { name: 'Filter by language' }).click();
@@ -667,6 +708,91 @@ try {
     releaseRefresh();
     await spinner.waitFor({ state: 'hidden' });
     await page.getByText(/^Last refresh:/).waitFor();
+    await page.getByTitle('Sort by channel number or custom order').click();
+    const firstDragHandle = list
+      .locator('li[data-index="0"]')
+      .getByRole('button', { name: /^Reorder / });
+    const channelHandleClass = await firstDragHandle.getAttribute('class');
+    const firstChannelName = (
+      await firstDragHandle.getAttribute('aria-label')
+    ).slice('Reorder '.length);
+    const beforeMove = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('aiolivetv-user-data'))
+    );
+    if (viewport.width < 640) {
+      await list.scrollIntoViewIfNeeded();
+      const from = await firstDragHandle.boundingBox();
+      const to = await list.locator('li[data-index="2"]').boundingBox();
+      const session = await context.newCDPSession(page);
+      const x = Math.round(from.x + from.width / 2);
+      const start = Math.round(from.y + from.height / 2);
+      const end = Math.round(to.y + to.height / 2);
+      await session.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ x, y: start }],
+      });
+      for (let step = 1; step <= 8; step++) {
+        await session.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [
+            { x, y: Math.round(start + ((end - start) * step) / 8) },
+          ],
+        });
+      }
+      await session.send('Input.dispatchTouchEvent', {
+        type: 'touchEnd',
+        touchPoints: [],
+      });
+      await session.detach();
+    } else {
+      await firstDragHandle.focus();
+      for (const position of [1, 2, 3]) {
+        await page.keyboard.press(position === 1 ? 'Space' : 'ArrowDown');
+        await page
+          .getByText(`Position ${position} of ${channels.length}.`, { exact: true })
+          .waitFor();
+      }
+      await page.keyboard.press('Space');
+    }
+    await list
+      .locator('li[data-index="2"]')
+      .getByText(firstChannelName, { exact: true })
+      .waitFor();
+    if (viewport.width >= 640) {
+      await list.scrollIntoViewIfNeeded();
+      const movedId = await page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem('aiolivetv-user-data')).channelOrder[2]
+      );
+      const handle = list.getByRole('button', {
+        name: 'Reorder ' + firstChannelName,
+        exact: true,
+      });
+      const from = await handle.boundingBox();
+      const scrollArea = await list.boundingBox();
+      const x = from.x + from.width / 2;
+      await page.mouse.move(x, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(x, scrollArea.y + scrollArea.height - 10, {
+        steps: 10,
+      });
+      await page.waitForFunction(
+        () =>
+          document.querySelector('div[aria-label="Channels"]').scrollTop > 1500
+      );
+      await page.mouse.up();
+      await page.waitForFunction((id) => {
+        const draft = JSON.parse(localStorage.getItem('aiolivetv-user-data'));
+        return draft.channelOrder.indexOf(id) > 20;
+      }, movedId);
+    }
+    assert((await list.locator('li[data-index]').count()) < 60);
+    const afterMove = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('aiolivetv-user-data'))
+    );
+    assert.equal(afterMove.channelOrder.length, channels.length);
+    assert.deepEqual(afterMove.channelMappings, beforeMove.channelMappings);
+    assert.deepEqual(writes, [], 'Reordering must stay in the draft');
     await page.getByText('Removed (1000)', { exact: true }).click();
     await list.locator('li[data-index]').first().waitFor();
     assert((await list.locator('li[data-index]').count()) < 60);
@@ -826,6 +952,7 @@ try {
       name: 'Reorder Resolution',
       exact: true,
     });
+    assert.equal(await handle.getAttribute('class'), channelHandleClass);
     await handle.focus();
     await page.keyboard.press('Space');
     await page.waitForTimeout(100);
@@ -909,6 +1036,7 @@ try {
     ])
       assert(!(key in cleanDraft), `${key} must not survive import`);
     assert.deepEqual(cleanDraft.channelMappings, afterSorting.channelMappings);
+    assert.deepEqual(cleanDraft.channelOrder, afterSorting.channelOrder);
     assert.deepEqual(cleanDraft.presets, afterSorting.presets);
     await page.getByRole('button', { name: 'Export', exact: true }).click();
     const downloadReady = page.waitForEvent('download');
@@ -926,6 +1054,7 @@ try {
     ])
       assert(!(key in exported), `${key} must not survive export`);
     assert.deepEqual(exported.channelMappings, cleanDraft.channelMappings);
+    assert.deepEqual(exported.channelOrder, cleanDraft.channelOrder);
     assert.deepEqual(exported.presets, cleanDraft.presets);
     assert.deepEqual(writes, [], 'Import/export must not save the draft');
     console.log(
@@ -938,6 +1067,7 @@ try {
         search: true,
         groups: true,
         removedVirtualized: true,
+        channelOrder: true,
         draftPersistence: true,
         epgChoice: true,
         countryLanguageBulkActions: true,

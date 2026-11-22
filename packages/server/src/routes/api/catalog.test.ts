@@ -53,6 +53,8 @@ vi.mock('@aiolivetv/core', async () => {
     await import('../../../../core/src/utils/channelName.js');
   const { decodeHtmlEntities } =
     await import('../../../../core/src/utils/text.js');
+  const { isSportsCatalogId } =
+    await import('../../../../core/src/utils/identity.js');
   const { parseDeclaredStreamInfo } =
     await import('../../../../core/src/streams/declared.js');
   const addons = [
@@ -69,6 +71,9 @@ vi.mock('@aiolivetv/core', async () => {
   ];
   return {
     ...matching,
+    readChannelNumber: (
+      await import('../../../../core/src/utils/channelName.js')
+    ).readChannelNumber,
     TMDBMetadata: class {
       constructor(auth: unknown) {
         fixture.languages(auth);
@@ -92,6 +97,7 @@ vi.mock('@aiolivetv/core', async () => {
     constants,
     APIError: constants.APIError,
     normalizeChannelGroup,
+    isSportsCatalogId,
     decodeHtmlEntities,
     parseDeclaredStreamInfo,
     getSimpleTextHash: (value: string) => value,
@@ -211,10 +217,16 @@ vi.mock('@aiolivetv/core', async () => {
           success: true,
           data: id.startsWith('guide.')
             ? [
-                { id: 'bbc', name: 'BBC News', tvgId: 'bbc.news' },
+                {
+                  id: 'bbc',
+                  name: 'BBC News',
+                  tvgId: 'bbc.news',
+                  channelNumber: '24',
+                },
                 {
                   id: 'hbo',
                   name: 'HBO West',
+                  genres: ['Movies'],
                   ...(fixture.hybridGuide
                     ? { behaviorHints: { hasStreams: false } }
                     : {}),
@@ -230,8 +242,17 @@ vi.mock('@aiolivetv/core', async () => {
                   : []),
               ]
             : [
-                { id: 'bbc-stream', name: 'BBC News HD', tvgId: 'BBC.NEWS' },
-                { id: 'hbo-stream', name: 'HBO West FHD' },
+                {
+                  id: 'bbc-stream',
+                  name: 'BBC News HD',
+                  tvgId: 'BBC.NEWS',
+                  genres: ['Playlist Group'],
+                },
+                {
+                  id: 'hbo-stream',
+                  name: 'HBO West FHD',
+                  genres: ['Playlist Group'],
+                },
                 { id: 'bbc-alt', name: 'BBC News International' },
                 ...Array.from({ length: fixture.extraStreams }, (_, index) => ({
                   id: 'extra-' + index,
@@ -306,6 +327,9 @@ async function scan(
         userData: {
           presets: [],
           sourceConfig,
+          ...(sourceConfig === 'manual-order'
+            ? { channelOrder: ['hbo', 'bbc'] }
+            : {}),
           channelMappings: [
             {
               id: 'bbc',
@@ -372,6 +396,9 @@ async function scan(
       channels: Array<{
         id: string;
         epgProvider: boolean;
+        channelNumber?: number;
+        group?: string;
+        sourceGroup?: string;
         enabled: boolean;
         mappings: Array<{ channelId: string; confidence: number }>;
         availableStreamSources: Array<{
@@ -388,6 +415,29 @@ async function scan(
 }
 
 describe('Channels prepared matching', () => {
+  it('takes channel groups only from the catalog when linking streams', async () => {
+    const channels = await scan(true);
+    const bbc = channels.find((channel) => channel.id === 'bbc')!;
+    expect(bbc.group).toBeUndefined();
+    expect(bbc.sourceGroup).toBeUndefined();
+    expect(bbc.mappings).toContainEqual(
+      expect.objectContaining({ addonId: 'streams', channelId: 'bbc-stream' })
+    );
+    expect(
+      bbc.mappings.find((mapping) => mapping.channelId === 'bbc-stream')
+    ).not.toHaveProperty('categories');
+    expect(channels.find((channel) => channel.id === 'hbo')).toMatchObject({
+      group: 'Movies',
+      sourceGroup: 'Movies',
+    });
+  });
+
+  it('returns saved order and current source numbers', async () => {
+    const data = await scan(false, false, undefined, 200, 'manual-order');
+    expect(data.map(({ id }) => id)).toEqual(['hbo', 'bbc']);
+    expect(data[1].channelNumber).toBe(24);
+  });
+
   it('accepts a 404 after valid catalog pages as the end of pagination', async () => {
     fixture.pagedChannels = 25;
     fixture.pagedStreams = 25;
@@ -677,6 +727,12 @@ describe('Channels prepared matching', () => {
     const channels = await scan(false);
     expect(channels).toHaveLength(2);
     expect(fixture.catalogCalls).toBe(2);
+  });
+
+  it('excludes sports fixtures from the channel inventory', async () => {
+    fixture.streamCatalog = 'aiolivetv-sports-football';
+    expect(await scan(false)).toHaveLength(2);
+    expect(fixture.catalogCalls).toBe(1);
   });
 
   it.each(['roundedPages', 'shiftedPages'] as const)(

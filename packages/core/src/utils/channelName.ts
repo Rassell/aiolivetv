@@ -1,5 +1,14 @@
 import { decodeHtmlEntities } from './text.js';
 
+/** Accept numeric channel metadata, including M3U tvg-chno strings. */
+export function readChannelNumber(value: unknown): number | undefined {
+  const number =
+    typeof value === 'string' && value.trim() ? Number(value) : value;
+  return typeof number === 'number' && Number.isFinite(number) && number >= 0
+    ? number
+    : undefined;
+}
+
 /**
  * Normalises live channel names for matching by stripping provider prefixes,
  * quality markers and audio/language hints while preserving regional identifiers.
@@ -22,10 +31,10 @@ export function normalizeChannelName(name: string): string {
   const wordsToRemove = [
     /\btv\b/g,
     /\bhd[2]?\b/g,
-    /\bfhd\b/g,
+    /\bfhd2?\b/g,
     /\buhd\b/g,
     /\b4k\b/g,
-    /\bsd\b/g,
+    /\bsd2?\b/g,
     /\blive\b/g,
     /\bao\s+vivo\b/g,
     /\bchannel\b/g,
@@ -110,6 +119,21 @@ export function normalizeChannelGroup(group?: string): string | undefined {
     .trim();
   if (!cleaned) return undefined;
   return titleCaseGroupWords(cleaned) || undefined;
+}
+
+export function resolveChannelGroup(
+  group: string | undefined,
+  merges?: Record<string, string>
+): string | undefined {
+  if (!group || !merges || !Object.hasOwn(merges, group)) return group;
+  const visited = new Set<string>();
+  let current = group;
+  while (Object.hasOwn(merges, current)) {
+    if (visited.has(current)) return group;
+    visited.add(current);
+    current = merges[current];
+  }
+  return current;
 }
 
 function tokenizeChannelName(name: string) {

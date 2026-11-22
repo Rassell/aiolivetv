@@ -1,7 +1,11 @@
-import { useState, type HTMLAttributes, type Ref } from 'react';
+import { useMemo, useState, type HTMLAttributes, type Ref } from 'react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { BiEdit, BiTrash } from 'react-icons/bi';
 import { LuLink, LuEllipsis, LuPower, LuSquareCheck } from 'react-icons/lu';
 import { IconButton } from '../../../ui/button';
+import { mergeRefs } from '../../../ui/core/utils';
+import { DragHandle } from '../../../shared/drag-handle';
 import { Switch } from '../../../ui/switch';
 import {
   DropdownMenu,
@@ -27,6 +31,7 @@ export type ChannelListItemProps = {
   onOpenMappings: () => void;
   onEdit: () => void;
   onRemove: () => void;
+  sortableId?: string;
 };
 
 function MappingBadge({
@@ -86,10 +91,34 @@ export function ChannelListItem({
   onOpenMappings,
   onEdit,
   onRemove,
+  sortableId,
 }: ChannelListItemProps) {
   const { accepted, pending, total } = getMappingStats(channel);
   const sourceLabel = getChannelSourceLabel(channel);
   const [logoFailed, setLogoFailed] = useState(false);
+  const displayNumber = channel.channelNumber;
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sortableId ?? channel.id, disabled: !sortableId });
+  const measureRow = rowProps?.ref;
+  const rowRef = useMemo(
+    () => (sortableId ? mergeRefs([measureRow, setNodeRef]) : measureRow),
+    [measureRow, setNodeRef, sortableId]
+  );
+  const rowStyle = sortableId
+    ? {
+        ...rowProps?.style,
+        transform: CSS.Translate.toString(transform),
+        transition,
+        opacity: isDragging ? 0.35 : undefined,
+      }
+    : rowProps?.style;
 
   const confirmDelete = useConfirmationDialog({
     title: 'Remove Channel',
@@ -100,7 +129,7 @@ export function ChannelListItem({
   });
 
   return (
-    <li {...rowProps}>
+    <li {...rowProps} ref={rowRef} style={rowStyle}>
       <div
         className={`flex items-center gap-2 rounded-[--radius-md] border px-2.5 py-2 transition-colors sm:gap-3 ${
           isSelected
@@ -108,6 +137,22 @@ export function ChannelListItem({
             : 'border-[--border] bg-[var(--background)]'
         }`}
       >
+        {sortableId ? (
+          <DragHandle
+            {...attributes}
+            {...listeners}
+            ref={setActivatorNodeRef}
+            label={`Reorder ${channel.name}`}
+          />
+        ) : null}
+        {displayNumber !== undefined ? (
+          <span
+            title={`Channel ${displayNumber}`}
+            className="w-8 flex-shrink-0 text-center font-mono text-xs font-semibold text-[--muted] tabular-nums"
+          >
+            {displayNumber}
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={onToggleSelect}

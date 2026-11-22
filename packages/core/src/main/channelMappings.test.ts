@@ -27,6 +27,10 @@ describe('prepared channel matching', () => {
     ['Sky Sports+', 'Sky Sports+.uk', 0.9],
     ['PREMIER SPORTS 1', 'Premier Sports 2', 0],
     ['TNT SPORTS 1', 'TNT Sports 10', 0],
+    ['GloboPlay Novelas FHD²', 'GloboPlay Novelas FHD', 0.9],
+    ['ESPN 2 FHD²', 'ESPN 3 FHD', 0],
+    ['GloboPlay Novelas SD²', 'GloboPlay Novelas SD', 0.9],
+    ['ESPN 2 SD²', 'ESPN 3 SD', 0],
     ['Channel 44', 'Channel 4', 0],
     ['CHANNEL 4+1', 'Channel 4', 0],
     ['CHANNEL 4', 'Channel 4 +1', 0],
@@ -187,6 +191,25 @@ describe('channel group overlay', () => {
         { id: 'a', name: '01 Globo' },
       ]).map((item) => item.id)
     ).toEqual(['a', 'b']);
+  });
+
+  it('prefers saved order, then the current source number and name', () => {
+    const items = [
+      { id: 'a', name: 'Alpha', channelNumber: 5 },
+      { id: 'b', name: 'Beta', channelNumber: 99 },
+      { id: 'c', name: 'Charlie', channelNumber: '1' },
+      { id: 'd', name: 'Delta' },
+    ];
+    expect(
+      sortLiveCatalogItems(items, { channelOrder: ['b'] }).map(({ id }) => id)
+    ).toEqual(['b', 'c', 'a', 'd']);
+    items[0].channelNumber = 0;
+    expect(sortLiveCatalogItems(items).map(({ id }) => id)).toEqual([
+      'a',
+      'c',
+      'b',
+      'd',
+    ]);
   });
 
   it('keeps the source group when there is no override', () => {

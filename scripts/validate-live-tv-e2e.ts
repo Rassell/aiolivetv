@@ -20,6 +20,64 @@ EPG_START.setUTCMilliseconds(0);
 const EPG_STOP = new Date(EPG_START.getTime() + 2 * 60 * 60 * 1000);
 const EPG_START_ISO = EPG_START.toISOString();
 
+const sportsLeague = 'International Test Cup';
+const sportsApiKey = 'sports-fixture-key';
+const sportsEvent = {
+  idEvent: '90001',
+  strSport: 'Soccer',
+  strEvent: 'Zulu FC vs Club A',
+  strLeague: sportsLeague,
+  strThumb: 'https://example.com/match-thumb.jpg',
+  strFanart: 'https://example.com/match-fanart.jpg',
+  strTimestamp: new Date().toISOString(),
+  strStatus: '1H',
+};
+const nextSportsEvent = {
+  ...sportsEvent,
+  idEvent: '90002',
+  strEvent: 'Alpha FC vs Club B',
+  strThumb: '',
+  strTimestamp: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  strStatus: 'NS',
+};
+const liveOnlySportsEvent = {
+  idEvent: '90003',
+  strSport: 'Soccer',
+  strLeague: 'Spanish La Liga',
+  strHomeTeam: 'Valencia',
+  strAwayTeam: 'Real Madrid',
+  strHomeTeamBadge: 'https://example.com/valencia.png',
+  strAwayTeamBadge: 'https://example.com/real-madrid.png',
+  strTimestamp: sportsEvent.strTimestamp,
+  strStatus: 'HT',
+};
+const sportsBroadcastArtwork = 'https://example.com/match-broadcast.jpg';
+const sportsDetailArtwork = 'https://example.com/match-detail.jpg';
+const artworkLookupFixtures = [
+  {
+    ...liveOnlySportsEvent,
+    idEvent: '90004',
+    strLeague: 'Artwork Test Cup',
+    strHomeTeam: 'Artwork FC',
+    strEvent: 'Artwork FC vs Real Madrid',
+  },
+  {
+    ...liveOnlySportsEvent,
+    idEvent: '90005',
+    strLeague: 'Artwork Test Cup',
+    strHomeTeam: 'Badge FC',
+    strEvent: 'Badge FC vs Real Madrid',
+  },
+  {
+    ...liveOnlySportsEvent,
+    idEvent: '90006',
+    strLeague: 'Artwork Test Cup',
+    strHomeTeam: 'Busy FC',
+    strEvent: 'Busy FC vs Real Madrid',
+  },
+];
+let artworkLookups = 0;
+
 const XMLTV_FIXTURE = `<tv>
   <channel id="bbc.one"><display-name>BBC One</display-name><icon src="https://example.com/bbc-logo.png" /></channel>
   <channel id="rtp1"><display-name>RTP 1</display-name></channel>
@@ -31,9 +89,9 @@ const XMLTV_FIXTURE = `<tv>
 </tv>`;
 
 const M3U_FIXTURE = `#EXTM3U
-#EXTINF:-1 tvg-id="bbc.one" tvg-name="BBC One" tvg-logo="https://example.com/bbc-logo.png",BBC One
+#EXTINF:-1 tvg-id="bbc.one" tvg-chno="20" tvg-name="BBC One" tvg-logo="https://example.com/bbc-logo.png",BBC One
 https://example.com/bbc.m3u8
-#EXTINF:-1 tvg-id="rtp-1" tvg-name="RTP-1",RTP-1
+#EXTINF:-1 tvg-id="rtp-1" tvg-chno="10" tvg-name="RTP-1",RTP-1
 https://example.com/rtp.m3u8`;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -82,7 +140,113 @@ async function startFixtureServer(): Promise<{
   server: Server;
   sourceBase: string;
 }> {
+  const failUpcomingLookupOnce = new Set(['lookupevent.php', 'lookuptv.php']);
   const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname.startsWith('/api/v1/json/')) {
+      if (!url.pathname.startsWith(`/api/v1/json/${sportsApiKey}/`)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ Message: 'Invalid Premium API key' }));
+        return;
+      }
+      if (url.pathname.endsWith('/livescore.php')) {
+        const livescore =
+          url.searchParams.get('s') === 'Soccer'
+            ? [
+                {
+                  ...liveOnlySportsEvent,
+                  idEvent: sportsEvent.idEvent,
+                  strStatus: sportsEvent.strStatus,
+                },
+                liveOnlySportsEvent,
+                ...artworkLookupFixtures,
+              ]
+            : [];
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ livescore }));
+        return;
+      }
+      if (url.pathname.endsWith('/eventstv.php')) {
+        const tvevents =
+          url.searchParams.get('a') === 'United_Kingdom'
+            ? [
+                {
+                  idEvent: liveOnlySportsEvent.idEvent,
+                  strCountry: 'United States',
+                  strEventThumb: 'https://example.com/wrong-market.jpg',
+                },
+                {
+                  idEvent: liveOnlySportsEvent.idEvent,
+                  strCountry: 'United Kingdom',
+                  strEventThumb: sportsBroadcastArtwork,
+                },
+              ]
+            : [];
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ tvevents }));
+        return;
+      }
+      const id = url.searchParams.get('id');
+      if (
+        url.pathname.endsWith('/lookupevent.php') &&
+        artworkLookupFixtures.some((event) => event.idEvent === id)
+      ) {
+        artworkLookups++;
+        if (id === artworkLookupFixtures[2].idEvent) {
+          res.writeHead(429).end();
+          return;
+        }
+      }
+      if (
+        id === nextSportsEvent.idEvent &&
+        failUpcomingLookupOnce.delete(url.pathname.split('/').at(-1) ?? '')
+      ) {
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        res.end('Service unavailable');
+        return;
+      }
+      const events = [sportsEvent, nextSportsEvent];
+      const response = url.pathname.endsWith('/eventsday.php')
+        ? {
+            events: events
+              .filter(
+                (event) =>
+                  event.strSport === url.searchParams.get('s') &&
+                  event.strTimestamp.slice(0, 10) === url.searchParams.get('d')
+              )
+              .map((event) => ({ ...event, strStatus: 'NS' })),
+          }
+        : url.pathname.endsWith('/lookupevent.php')
+          ? {
+              events: [
+                ...events,
+                {
+                  ...liveOnlySportsEvent,
+                  strEvent: 'Valencia vs Real Madrid',
+                  strThumb: sportsDetailArtwork,
+                },
+                { ...artworkLookupFixtures[0], strThumb: sportsDetailArtwork },
+                artworkLookupFixtures[1],
+              ].filter((event) => event.idEvent === id),
+            }
+          : {
+              tvevent: [
+                {
+                  idEvent: id,
+                  strChannel: 'BBC One',
+                  strCountry: 'United Kingdom',
+                },
+                {
+                  idEvent: id,
+                  strChannel: 'ESPN 2',
+                  strCountry: 'United States',
+                },
+              ],
+            };
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(response));
+      return;
+    }
     if (
       req.url === '/guide.xml' ||
       req.url === '/guide-enrichment.xml' ||
@@ -480,9 +644,17 @@ async function validateWithoutEpg(
   const channels = (await aio.getCatalog(constants.TV_TYPE, catalog.id)).data;
   assert(channels.length === 2, 'expected two M3U channels');
 
-  const bbcId = channels.find((item) => item.name === 'BBC One')!.id;
+  assert(channels[0].name === 'RTP-1', 'catalog must follow source channel numbers');
+  const bbcId = channels[1].id;
+  const ordered = await new AIOStreams({
+    ...userData,
+    channelOrder: [bbcId, channels[0].id],
+  }).initialise();
+  const reordered = await ordered.getCatalog(constants.TV_TYPE, catalog.id);
+  assert(reordered.data[0]?.id === bbcId, 'saved order must win over source channel numbers');
   const meta = (await aio.getMeta(constants.TV_TYPE, bbcId)).data;
   assert(meta?.name === 'BBC One', 'expected M3U channel meta');
+  assert(meta.channelNumber === 20, 'meta must keep the playlist channel number');
   assert(
     meta?.videos === undefined,
     'M3U-only meta must not include EPG videos'
@@ -983,6 +1155,31 @@ async function validateParallelStreamResolution(core: CoreModule) {
       catalogRequests === 6,
       'disabled channels must not resolve provider catalogs'
     );
+    const unlinked = await new core.AIOStreams(
+      liveTvUserData(presets.slice(0, 1), [
+        {
+          id: 'canonical-bbc',
+          name: 'BBC News',
+          streams: [],
+          rejectedStreams: [
+            {
+              addonId: addonInstanceId(aio, 'provider-0'),
+              channelId: 'provider-0:bbc',
+            },
+          ],
+        },
+      ])
+    ).initialise();
+    const beforeUnlinked = streamIds.length;
+    const unlinkedResult = await unlinked.getStreams(
+      'canonical-bbc',
+      core.constants.TV_TYPE
+    );
+    assert(
+      unlinkedResult.data.streams.length === 0 &&
+        streamIds.length === beforeUnlinked,
+      'removing the last linked stream must prevent playback from automatically matching it again'
+    );
     const unmatched = await new core.AIOStreams(
       liveTvUserData(presets, [
         {
@@ -1179,6 +1376,7 @@ async function validateGuideChoicesAndPersistence(
   const password = 'live-tv-validation-only';
   const legacyDraft: UserData = {
     ...draft,
+    channelOrder: [mapping.id],
     preferredResolutions: ['720p', '1080p'],
     enableSeadex: true,
     checkOwned: true,
@@ -1240,6 +1438,7 @@ async function validateGuideChoicesAndPersistence(
           mapping.streams![0].addonId,
       'presets and stream order must survive persistence'
     );
+    assert(restored.channelOrder?.[0] === mapping.id, 'channel order must survive UserData persistence');
     await core.UserRepository.updateUser(saved.uuid, password, {
       ...restored,
       enableSeadex: true,
@@ -1318,6 +1517,284 @@ async function validateDetailsOnlyEnrichment(sourceBase: string, core: CoreModul
   console.log('  [ok] TMDB enrichment: discovery skips lookups, channel details enrich on demand');
 }
 
+async function validateSports(
+  sourceBase: string,
+  internalBase: string,
+  core: CoreModule
+) {
+  const draft = liveTvUserData([
+    {
+      type: 'sports',
+      instanceId: 'sports-1',
+      enabled: true,
+      options: {
+        locale: 'pt',
+        market: 'GB',
+        timeZone: 'UTC',
+        theSportsDbApiKey: sportsApiKey,
+      },
+    },
+    {
+      ...m3uPreset,
+      options: { ...m3uPreset.options, sourceUrl: `${sourceBase}/list.m3u` },
+    },
+  ]);
+  const userUrl = `${internalBase}/api/v${core.constants.API_VERSION}/user`;
+  const password = 'sports-fixture-password';
+  const json = async <T>(url: string, init?: RequestInit): Promise<T> => {
+    const response = await fetch(url, init);
+    assert(
+      response.ok,
+      `${init?.method ?? 'GET'} returned ${response.status} in sports validation`
+    );
+    return (await response.json()) as T;
+  };
+  const saved = (
+    await json<{ data: { uuid: string; encryptedPassword: string } }>(userUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: draft, password }),
+    })
+  ).data;
+  const auth = {
+    authorization: `Basic ${Buffer.from(`${saved.uuid}:${password}`).toString('base64')}`,
+  };
+  const stremio = `${internalBase}/stremio/${saved.uuid}/${encodeURIComponent(saved.encryptedPassword)}`;
+  const catalog = (id: string, extras = '') =>
+    json<import('../packages/core/dist/index.js').CatalogResponse>(
+      `${stremio}/catalog/tv/${id}${extras ? `/${extras}` : ''}.json`
+    );
+  const streams = (id: string) =>
+    json<import('../packages/core/dist/index.js').AIOStreamResponse>(
+      `${stremio}/stream/tv/${encodeURIComponent(id)}.json`
+    );
+  try {
+    const {
+      data: { userData: restored },
+    } = await json<{ data: { userData: UserData } }>(`${userUrl}?raw=true`, {
+      headers: auth,
+    });
+    assert(
+      restored.presets[0]?.options.market === 'GB' &&
+        restored.presets[0]?.options.theSportsDbApiKey === sportsApiKey,
+      'sports preferences and the supplied key must persist in the preset'
+    );
+    const manifest = await json<
+      import('../packages/core/dist/index.js').Manifest
+    >(`${stremio}/manifest.json`);
+    assert(
+      !JSON.stringify(manifest).includes(sportsApiKey),
+      'the Stremio manifest must not expose the API key'
+    );
+    const invalidDraft = structuredClone(draft);
+    invalidDraft.presets[0].options.theSportsDbApiKey = 'invalid-fixture-key';
+    const rejected = await fetch(userUrl, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({ config: invalidDraft }),
+    });
+    assert(
+      !rejected.ok && !(await rejected.text()).includes('invalid-fixture-key'),
+      'an invalid key must be rejected without exposing it or using the valid key’s cache'
+    );
+    assert(
+      !manifest.behaviorHints?.epgProvider,
+      'sports schedule must not enable Native EPG'
+    );
+    const football = manifest.catalogs.find(
+      (catalog) => catalog.name === 'Futebol'
+    );
+    assert(
+      football?.extra?.some(
+        (extra) =>
+          extra.name === 'genre' &&
+          extra.options?.includes(sportsLeague) &&
+          extra.options.includes(liveOnlySportsEvent.strLeague)
+      ),
+      'manifest must retain localized names and championship options'
+    );
+    for (const resourceName of ['meta', 'stream']) {
+      assert(
+        manifest.resources.some(
+          (resource) =>
+            typeof resource !== 'string' &&
+            resource.name === resourceName &&
+            resource.idPrefixes?.includes(core.SPORTS_EVENT_PREFIX)
+        ),
+        `manifest must advertise ${resourceName} for sports IDs`
+      );
+    }
+    // A saved Stremio link can be opened after a restart without loading the catalog.
+    await core.Cache.clearPrefix('sports-data');
+    const upcomingId = `${core.SPORTS_EVENT_PREFIX}${nextSportsEvent.idEvent}`;
+    const { meta: upcomingMeta } = await json<
+      import('../packages/core/dist/index.js').MetaResponse
+    >(`${stremio}/meta/tv/${encodeURIComponent(upcomingId)}.json`);
+    assert(
+      upcomingMeta.name === `🕒 ${nextSportsEvent.strEvent}` &&
+        upcomingMeta.poster === nextSportsEvent.strFanart &&
+        upcomingMeta.description?.includes(
+          'Informação de transmissão temporariamente indisponível'
+        ),
+      `sports details must survive a failed lookup before opening the catalog: ${upcomingMeta.name} (${upcomingMeta.description})`
+    );
+    const missingId = `${core.SPORTS_EVENT_PREFIX}99999`;
+    const missing = await fetch(
+      `${stremio}/meta/tv/${encodeURIComponent(missingId)}.json`
+    );
+    assert(
+      missing.headers.get('cache-control')?.includes('no-store') &&
+        !(await missing.json()).cacheMaxAge,
+      'failed meta responses must not be cached by Stremio or CDNs'
+    );
+    const matches = await catalog(
+      football.id,
+      `genre=${encodeURIComponent(sportsLeague)}`
+    );
+    assert(
+      matches.metas?.map((item) => item.name).join(',') ===
+        `🔴 ${sportsEvent.strEvent},🕒 ${nextSportsEvent.strEvent}`,
+      'sports catalog must show live and upcoming markers in kickoff order'
+    );
+    const [live, upcoming] = matches.metas;
+    const liveOnly = await catalog(
+      football.id,
+      `genre=${encodeURIComponent(liveOnlySportsEvent.strLeague)}`
+    );
+    assert(
+      liveOnly.metas?.length === 1 &&
+        liveOnly.metas[0].id ===
+          `${core.SPORTS_EVENT_PREFIX}${liveOnlySportsEvent.idEvent}` &&
+        liveOnly.metas[0].name === '🔴 Valencia vs Real Madrid',
+      'the catalog must show live games missing from the daily schedule under their league'
+    );
+    assert(
+      liveOnly.metas[0].posterShape === 'landscape' &&
+        liveOnly.metas[0].poster === sportsBroadcastArtwork,
+      'live games without event artwork must use the matching broadcast thumbnail from the saved market'
+    );
+    const { meta: liveOnlyMeta } = await json<
+      import('../packages/core/dist/index.js').MetaResponse
+    >(`${stremio}/meta/tv/${encodeURIComponent(liveOnly.metas[0].id)}.json`);
+    assert(
+      liveOnlyMeta.poster === sportsDetailArtwork,
+      'details must prefer the official match artwork'
+    );
+    await core.Cache.clearPrefix('catalog');
+    const refreshed = await catalog(
+      football.id,
+      `genre=${encodeURIComponent(liveOnlySportsEvent.strLeague)}`
+    );
+    assert(
+      refreshed.metas?.[0]?.poster === sportsDetailArtwork,
+      'the catalog must reuse official artwork from the match details when refreshed'
+    );
+    const artworkExtras = `genre=${encodeURIComponent(artworkLookupFixtures[0].strLeague)}`;
+    const expectedPosters = [
+      sportsDetailArtwork,
+      artworkLookupFixtures[1].strHomeTeamBadge,
+      artworkLookupFixtures[2].strHomeTeamBadge,
+    ].join(',');
+    const firstArtworkPage = await catalog(football.id, artworkExtras);
+    assert(
+      firstArtworkPage.metas?.map((item) => item.poster).join(',') === expectedPosters &&
+        artworkLookups === 3,
+      'the catalog must fetch missing match artwork and fall back when no artwork exists'
+    );
+    await core.Cache.clearPrefix('catalog');
+    await core.Cache.clearPrefix('sports-data');
+    const cachedArtworkPage = await catalog(football.id, artworkExtras);
+    assert(
+      cachedArtworkPage.metas?.map((item) => item.poster).join(',') === expectedPosters &&
+        artworkLookups === 3,
+      'rebuilding the catalog must reuse artwork and defer unavailable lookups, including rate limits'
+    );
+    const sportsCacheResponse = await fetch(
+      `${stremio}/catalog/tv/${football.id}/${artworkExtras}.json`
+    );
+    assert(
+      sportsCacheResponse.headers.get('cache-control')?.includes('s-maxage=60') &&
+        (await sportsCacheResponse.json()).cacheMaxAge === 60,
+      'sports catalog responses must expire quickly so refreshed artwork can be shown'
+    );
+    assert(
+      live.posterShape === 'landscape' &&
+        live.poster === sportsEvent.strThumb &&
+        upcoming.posterShape === 'landscape' &&
+        upcoming.poster === nextSportsEvent.strFanart,
+      'sports catalog must use the event thumbnail or fanart in landscape'
+    );
+    const { meta } = await json<
+      import('../packages/core/dist/index.js').MetaResponse
+    >(`${stremio}/meta/tv/${encodeURIComponent(live.id)}.json`);
+    assert(
+      meta.description?.includes('Onde assistir (Reino Unido): BBC One'),
+      'meta must use the saved market and locale'
+    );
+    assert(meta.name === live.name, 'sports details must keep the live marker');
+    assert(
+      meta.posterShape === 'landscape' &&
+        meta.poster === live.poster &&
+        meta.background === live.poster &&
+        meta.videos?.length === 1 &&
+        meta.videos[0].id === live.id &&
+        meta.videos[0].thumbnail === live.poster &&
+        meta.videos[0].background === live.poster,
+      'sports details must reuse the landscape poster as the background and video artwork without changing the playback ID'
+    );
+    const lineup = await catalog(core.LIVE_TV_MERGED_CATALOG_ID);
+    assert(
+      lineup.metas?.every(
+        (item) => !item.id.startsWith(core.SPORTS_EVENT_PREFIX)
+      ),
+      'channel catalog must exclude sports matches'
+    );
+    const bbc = lineup.metas.find((item) => item.name === 'BBC One');
+    assert(bbc, 'fixture must expose BBC One');
+    assert(
+      (await streams(live.id)).streams.some((stream) =>
+        stream.url?.includes('/bbc.m3u8')
+      ),
+      'live fixture must resolve the configured channel stream'
+    );
+    assert(
+      (await streams(upcoming.id)).streams.length === 0,
+      'upcoming fixtures must not return streams'
+    );
+    const guide = {
+      ...xmltvPreset,
+      options: { ...xmltvPreset.options, sourceUrl: `${sourceBase}/guide.xml` },
+    };
+    await json(userUrl, {
+      method: 'PUT',
+      headers: { ...auth, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        config: {
+          ...restored,
+          presets: [...restored.presets, guide],
+          channelMappings: [{ id: bbc.id, enabled: false }],
+        },
+      }),
+    });
+    const withGuide = await json<
+      import('../packages/core/dist/index.js').Manifest
+    >(`${stremio}/manifest.json`);
+    assert(
+      withGuide.behaviorHints?.epgProvider,
+      'a configured guide must still enable Native EPG'
+    );
+    assert(
+      (await streams(live.id)).streams.length === 0,
+      'disabled channels must not play from a sports catalog'
+    );
+  } finally {
+    await json(userUrl, { method: 'DELETE', headers: auth });
+  }
+  console.log(
+    '  [ok] Sports: saved preferences, localized manifest, genre, meta, live streams and EPG isolation'
+  );
+}
+
 async function main() {
   console.log('Validando Live TV E2E...');
   const { server: fixtureServer, sourceBase } = await startFixtureServer();
@@ -1327,6 +1804,7 @@ async function main() {
   process.env.REQUEST_URL_MAPPINGS = JSON.stringify({
     'https://iptv-org.github.io': sourceBase,
     'https://iptv-epg.org': sourceBase,
+    'https://www.thesportsdb.com': sourceBase,
   });
 
   try {
@@ -1351,6 +1829,10 @@ async function main() {
     await validateParallelStreamResolution(core);
     await validateGuideChoicesAndPersistence(sourceBase, core);
     await validateDetailsOnlyEnrichment(sourceBase, core);
+    const { default: app } = await import('../packages/server/src/app.js');
+    builtinServer.removeAllListeners('request');
+    builtinServer.on('request', app);
+    await validateSports(sourceBase, internalBase, core);
     console.log('Live TV E2E: todos os checks passaram.');
   } finally {
     await Promise.all([

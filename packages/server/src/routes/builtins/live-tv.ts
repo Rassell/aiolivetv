@@ -13,6 +13,7 @@ import {
   appConfig,
   M3uAddon,
   XmltvAddon,
+  SportsAddon,
   VivoTvAddon,
   MovistarTvAddon,
   TvpAddon,
@@ -52,6 +53,13 @@ interface ResourceParams {
 
 function config(encodedConfig: string): LiveTvSourceConfig {
   return JSON.parse(fromUrlSafeBase64(encodedConfig));
+}
+
+function sportsAddon(encodedConfig: string, authorization?: string) {
+  return new SportsAddon({
+    ...JSON.parse(fromUrlSafeBase64(encodedConfig)),
+    theSportsDbApiKey: /^Bearer (.+)$/i.exec(authorization ?? '')?.[1],
+  });
 }
 
 function vivoConfig(encodedConfig: string): VivoTvConfig {
@@ -166,6 +174,51 @@ router.get(
           req.params.id
         ),
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get('/sports/:encodedConfig/manifest.json', async (req, res, next) => {
+  try {
+    res.json(
+      await sportsAddon(
+        req.params.encodedConfig,
+        req.get('authorization')
+      ).getManifest()
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get(
+  '/sports/:encodedConfig/catalog/:type/:id{/:extras}.json',
+  async (req: Request<ResourceParams>, res, next) => {
+    try {
+      const { skip, genre } = parseCatalogExtras(getEncodedExtras(req));
+      const metas = await sportsAddon(
+        req.params.encodedConfig,
+        req.get('authorization')
+      ).getCatalog(req.params.id, skip, genre);
+      res.json({ metas, cacheMaxAge: 60 });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/sports/:encodedConfig/meta/:type/:id.json',
+  async (req: Request<ResourceParams>, res, next) => {
+    try {
+      const meta = await sportsAddon(
+        req.params.encodedConfig,
+        req.get('authorization')
+      ).getMeta(req.params.id);
+      if (meta) res.json({ meta, cacheMaxAge: 60 });
+      else res.sendStatus(404);
     } catch (error) {
       next(error);
     }
@@ -677,11 +730,11 @@ for (const [source, Addon] of [
     `/${source}/:encodedConfig/catalog/:type/:id{/:extras}.json`,
     async (req: Request<ResourceParams>, res: Response, next: NextFunction) => {
       try {
-        const { skip, date } = parseCatalogExtras(getEncodedExtras(req));
+        const { skip, date, genre } = parseCatalogExtras(getEncodedExtras(req));
         const addon = new Addon(
           SpainTvConfigSchema.parse(config(req.params.encodedConfig))
         );
-        res.json(await addon.getCatalogResponse(skip, date));
+        res.json(await addon.getCatalogResponse(skip, date, genre));
       } catch (error) {
         next(error);
       }

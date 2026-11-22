@@ -9,6 +9,8 @@ import { MI_TV_COUNTRIES } from '../builtins/mitv/index.js';
 import { SpainTvConfigSchema } from '../builtins/spain/addon.js';
 import { MOVISTAR_COUNTRIES } from '../builtins/movistartv/index.js';
 import { XtreamConfigSchema } from '../builtins/xtream/config.js';
+import { SportsConfigSchema } from '../builtins/sports/addon.js';
+import { SPORTS_MARKETS } from '../builtins/sports/provider.js';
 import {
   TvheadendConfigSchema,
   getTvheadendInstancePolicy,
@@ -22,8 +24,13 @@ import {
   plutoTvRegionLabel,
 } from '../builtins/plutotv/index.js';
 import StreamParser from '../parser/streams.js';
-import { appConfig, constants, toUrlSafeBase64 } from '../utils/index.js';
-import { Preset, baseOptions } from './preset.js';
+import {
+  appConfig,
+  constants,
+  getSimpleTextHash,
+  toUrlSafeBase64,
+} from '../utils/index.js';
+import { Preset, baseOptions, type CacheKeyRequestOptions } from './preset.js';
 
 class LiveTvStreamParser extends StreamParser {
   protected override getStreamType(
@@ -211,6 +218,110 @@ export class XmltvPreset extends Preset {
         this.METADATA.SUPPORTED_RESOURCES,
         options
       ),
+    ];
+  }
+}
+
+export class SportsPreset extends Preset {
+  static override get METADATA() {
+    const options: Option[] = [
+      {
+        id: 'theSportsDbApiKey',
+        name: 'TheSportsDB API key',
+        description:
+          'Enter your own TheSportsDB API key. It is used for fixtures and broadcaster listings.',
+        type: 'password',
+        required: true,
+        showInSimpleMode: true,
+      },
+      {
+        id: 'locale',
+        name: 'Catalog language',
+        description:
+          'Language used for sports catalog labels and match details.',
+        type: 'select',
+        required: true,
+        showInSimpleMode: true,
+        default: 'en',
+        options: [
+          { value: 'en', label: 'English' },
+          { value: 'es', label: 'Español' },
+          { value: 'pt', label: 'Português' },
+        ],
+      },
+      {
+        id: 'market',
+        name: 'Broadcast country',
+        description:
+          'Country used to look up broadcasters. The fixture schedule includes international competitions.',
+        type: 'select',
+        required: true,
+        showInSimpleMode: true,
+        options: SPORTS_MARKETS,
+      },
+      {
+        id: 'timeZone',
+        name: 'Time zone',
+        description:
+          'Time zone for kickoff and the catalog day, such as America/New_York or Europe/Madrid.',
+        type: 'string',
+        required: true,
+        showInSimpleMode: true,
+        default: 'UTC',
+      },
+    ];
+    return {
+      ID: 'sports',
+      NAME: 'Sports (Beta)',
+      LOGO: '',
+      URL: [`${appConfig.bootstrap.internalUrl}/builtins/live-tv/sports`],
+      TIMEOUT: appConfig.presets.defaultTimeout,
+      USER_AGENT: appConfig.http.defaultUserAgent,
+      SUPPORTED_SERVICES: [],
+      DESCRIPTION:
+        'International football and basketball fixtures and regional broadcaster listings from TheSportsDB. Artwork and broadcast coverage vary by event and country.',
+      OPTIONS: options,
+      SUPPORTED_STREAM_TYPES: [],
+      SUPPORTED_RESOURCES: [
+        constants.CATALOG_RESOURCE,
+        constants.META_RESOURCE,
+      ],
+      BUILTIN: true,
+      CATEGORY: constants.PresetCategory.META_CATALOGS,
+    };
+  }
+
+  static override getCacheKey({
+    resource,
+    type,
+    id,
+    extras,
+    options,
+  }: CacheKeyRequestOptions): string {
+    return `sports:${getSimpleTextHash(JSON.stringify([resource, type, id, extras, options]))}`;
+  }
+
+  static override async generateAddons(
+    _userData: UserData,
+    options: Record<string, any>
+  ): Promise<Addon[]> {
+    const metadata = this.METADATA;
+    const { theSportsDbApiKey, ...settings } =
+      SportsConfigSchema.parse(options);
+    return [
+      {
+        name: metadata.NAME,
+        manifestUrl: `${metadata.URL[0]}/${toUrlSafeBase64(JSON.stringify(settings))}/manifest.json`,
+        enabled: true,
+        resources: metadata.SUPPORTED_RESOURCES,
+        timeout: metadata.TIMEOUT,
+        resultPassthrough: true,
+        preset: { id: '', type: metadata.ID, options },
+        headers: {
+          'User-Agent': metadata.USER_AGENT,
+          Authorization: `Bearer ${theSportsDbApiKey}`,
+        },
+      },
     ];
   }
 }
